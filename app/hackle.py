@@ -37,7 +37,6 @@ def validate_workload(r):
 
     return False
 
-
 def get_load(w):
     if w not in CACHED_LOADS:
         CACHED_LOADS[w] = 2 ** (w + 12)
@@ -157,7 +156,7 @@ def login(r):
 
     username = r.args.get("username", [])[0]
 
-    user = yield dbpool.runQuery("SELECT id, pubkey FROM users WHERE username=? LIMIT 1",
+    user = yield dbpool.runQuery("SELECT id, pubkey FROM users WHERE username=? LIMIT 1;",
         (username, ))
 
     if not len(user):
@@ -167,7 +166,7 @@ def login(r):
         increase_workload(r)
         return
 
-    user_pub_key = PublicKey(base64.b64decode(user[0][1]))
+    user_pub_key = PublicKey(user[0][1], Base64Encoder)
     enc_content = base64.b64decode(r.args["payload"][0])
     box = Box(SERVER_KEY, user_pub_key)
     raw = json.loads(box.decrypt(enc_content))
@@ -179,9 +178,13 @@ def login(r):
         increase_workload(r)
         return
 
-    yield dbpool.runQuery("INSERT INTO sessions (user, created) VALUES (?, ?)",
-        (user[0][0], time.time()))
-    res = yield dbpool.runQuery("SELECT last_insert_rowid() FROM sessions")
+    def insert_and_id(txn):
+        txn.execute("INSERT INTO sessions (user, created) VALUES (?, ?);",
+            (user[0][0], time.time()))
+        txn.execute("SELECT last_insert_rowid() FROM sessions;")
+        return txn.fetchall()
+
+    res = yield dbpool.runInteraction(insert_and_id)
 
     jsonify(r, {
         "id": res[0][0]
