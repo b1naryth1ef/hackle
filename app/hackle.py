@@ -4,19 +4,20 @@ from twisted.internet import defer
 from twisted.enterprise import adbapi
 from twisted.internet import protocol
 from twisted.internet import reactor
-import botan, txredis
+import txredis
+
+import nacl.utils
+from nacl.public import PrivateKey, Box, PublicKey
+from nacl.encoding import Base64Encoder
 
 dbpool = adbapi.ConnectionPool("sqlite3", "hek.db", check_same_thread=False)
-rng = botan.RandomNumberGenerator()
 clientCreator = protocol.ClientCreator(reactor, txredis.HiRedisClient)
 
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
 REDIS = None
 
-PUBKEY = None
-PRIVKEY = None
-
+SERVER_KEY = None
 CACHED_LOADS = {}
 
 def increase_workload(r):
@@ -29,7 +30,8 @@ def validate_workload(r):
         q = base64.b64decode(r.args["powq"][0])
         a = r.args["powa"][0]
 
-        q = PRIVKEY.decrypt(q, "EME1(SHA-1)")
+        box = Box(SERVER_KEY, SERVER_KEY.public_key)
+        q = box.decrypt(q)
         if q and q.split(",")[1] == a:
             return True
 
@@ -53,35 +55,23 @@ def connect_redis():
     REDIS = yield clientCreator.connectTCP(REDIS_HOST, REDIS_PORT)
 
 def create_new_keypair():
-    new_priv = botan.RSA_PrivateKey(1024, rng)
-    new_pub = botan.RSA_PublicKey(new_priv)
-
-    return (new_priv, new_pub)
+    return PrivateKey.generate()
 
 def setup_server_keys():
-    global PUBKEY, PRIVKEY
-    if not os.path.exists("keys/pub.key") or not os.path.exists("keys/priv.key"):
+    global SERVER_KEY
+    if not os.path.exists("keys/server.key"):
         if not os.path.exists("keys"):
             os.mkdir("keys")
 
-        priv, pub = create_new_keypair()
+        SERVER_KEY = create_new_keypair()
 
-        PRIVKEY = priv
-        PUBKEY = pub
-
-        with open("keys/pub.key", "w") as f:
-            f.write(pub.to_string())
-
-        with open("keys/priv.key", "w") as f:
-            f.write(priv.to_string())
+        with open("keys/server.key", "w") as f:
+            f.write(SERVER_KEY._private_key)
 
         return
 
-    with open("keys/priv.key", "r") as f:
-        PRIVKEY = botan.RSA_PrivateKey(f.read(), rng)
-
-    with open("keys/pub.key", "r") as f:
-        PUBKEY = botan.RSA_PublicKey(f.read())
+    with open("keys/server.key", "r") as f:
+        SERVER_KEY = PrivateKey(f.read().strip())
 
 @defer.inlineCallbacks
 def create_database_schema():
@@ -98,7 +88,7 @@ def create_database_schema():
         id INTEGER PRIMARY KEY ASC,
         user INTEGER,
         created INTEGER
-    )
+    );
     """
 
     data = yield dbpool.runQuery(
@@ -130,31 +120,73 @@ def register(r):
     exists = yield dbpool.runQuery("SELECT count(*) FROM users WHERE username=? LIMIT 1",
         (username, ))
 
-    if len(exists):
+    if len(exists) and exists[0][0] != 0:
         jsonify(r, {
             "error": "Username already exists!"
         }, 400)
         increase_workload(r)
         return
 
-    pub, priv = create_new_keypair()
+    priv = create_new_keypair()
     id = yield dbpool.runQuery("INSERT INTO users (username, pubkey) VALUES (?, ?)",
-        (username, pub.to_string()))
+        (username, base64.b64encode(str(priv.public_key))))
 
     jsonify(r, {
         "id": id,
-        "keys": {
-            "public": pub.to_string(),
-            "private": pub.to_string()
-        }
+        "key": base64.b64encode(priv._private_key)
     })
 
     increase_workload(r)
 
-
 @route("/api/login")
+@defer.inlineCallbacks
 def login(r):
-    pass
+    if not validate_workload(r):
+        jsonify(r, {
+            "error": "Invalid or no Proof of Work!"
+        }, 400)
+        increase_workload(r)
+        return
+
+    if "payload" not in r.args:
+        jsonify(r, {
+            "error": "Invalid login request!"
+        }, 400)
+        increase_workload(r)
+        return
+
+    username = r.args.get("username", [])[0]
+
+    user = yield dbpool.runQuery("SELECT id, pubkey FROM users WHERE username=? LIMIT 1",
+        (username, ))
+
+    if not len(user):
+        jsonify(r, {
+            "error": "Invalid Username!"
+        }, 400)
+        increase_workload(r)
+        return
+
+    user_pub_key = PublicKey(base64.b64decode(user[0][1]))
+    enc_content = base64.b64decode(r.args["payload"][0])
+    box = Box(SERVER_KEY, user_pub_key)
+    raw = json.loads(box.decrypt(enc_content))
+
+    if (time.time() - raw["timestamp"]) > 60:
+        jsonify(r, {
+            "error": "Timestamp is older than 60 seconds!"
+        }, 400)
+        increase_workload(r)
+        return
+
+    yield dbpool.runQuery("INSERT INTO sessions (user, created) VALUES (?, ?)",
+        (user[0][0], time.time()))
+    res = yield dbpool.runQuery("SELECT last_insert_rowid() FROM sessions")
+
+    jsonify(r, {
+        "id": res[0][0]
+    })
+
 
 @route("/api/logout")
 def logout(r):
@@ -174,11 +206,20 @@ def hash(r):
 
     hidden = str(random.randint(0, load))
     base = ','.join([str(time.time()), hidden, str(load)])
-    encrypted_base = PUBKEY.encrypt(base, "EME1(SHA-1)", rng)
+    nonce = nacl.utils.random(Box.NONCE_SIZE)
+
+    box = Box(SERVER_KEY, SERVER_KEY.public_key)
+    encrypted_base = box.encrypt(base, nonce)
     digest = hashlib.sha512(hidden + encrypted_base).hexdigest()
 
     jsonify(r, {
         "load": load,
         "hash": digest.decode("utf-8"),
         "base": base64.b64encode(encrypted_base).decode("utf-8"),
+    })
+
+@route("/api/info")
+def info(r):
+    jsonify(r, {
+        "key": base64.b64encode(str(SERVER_KEY.public_key)),
     })
