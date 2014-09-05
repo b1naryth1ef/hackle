@@ -25,17 +25,37 @@ def increase_workload(r):
     REDIS.incr(key, 1)
     REDIS.expire(key, 60 * 5)
 
+@defer.inlineCallbacks
 def validate_workload(r):
     if "powq" in r.args and "powa" in r.args:
         q = base64.b64decode(r.args["powq"][0])
         a = r.args["powa"][0]
 
         box = Box(SERVER_KEY, SERVER_KEY.public_key)
-        q = box.decrypt(q)
-        if q and q.split(",")[1] == a:
-            return True
+        q = box.decrypt(q).split(",")
+        if q[1] != a:
+            print 1
+            defer.returnValue(False)
+            return
 
-    return False
+        # Work is expired
+        if (float(q[0]) - time.time()) > 80:
+            print 2
+            defer.returnValue(False)
+            return
+
+        ex = yield REDIS.get(":workload:%s" % r.getClientIP())
+        ex = ex or 1
+
+        # Work load is smaller than what we require
+        if int(q[2]) < int(ex):
+            defer.returnValue(False)
+            return
+
+        defer.returnValue(True)
+        return
+
+    defer.returnValue(False)
 
 def get_load(w):
     if w not in CACHED_LOADS:
@@ -108,7 +128,8 @@ def home(r):
 @route("/api/register")
 @defer.inlineCallbacks
 def register(r):
-    if not validate_workload(r):
+    valid = yield validate_workload(r)
+    if not valid:
         jsonify(r, {
             "error": "Invalid or no Proof of Work!"
         }, 400)
@@ -140,7 +161,8 @@ def register(r):
 @route("/api/login")
 @defer.inlineCallbacks
 def login(r):
-    if not validate_workload(r):
+    valid = yield validate_workload(r)
+    if not valid:
         jsonify(r, {
             "error": "Invalid or no Proof of Work!"
         }, 400)
@@ -205,10 +227,11 @@ def hash(r):
     key = ":workload:%s" % r.getClientIP()
 
     ex = yield REDIS.get(key)
-    load = get_load(int(ex or 1))
+    load_level = int(ex or 1)
+    load = get_load(load_level)
 
     hidden = str(random.randint(0, load))
-    base = ','.join([str(time.time()), hidden, str(load)])
+    base = ','.join([str(time.time()), hidden, str(load_level)])
     nonce = nacl.utils.random(Box.NONCE_SIZE)
 
     box = Box(SERVER_KEY, SERVER_KEY.public_key)
