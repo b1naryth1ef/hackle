@@ -1,4 +1,4 @@
-import requests, hashlib, base64, time, json, random
+import requests, hashlib, base64, time, json
 
 import nacl.utils
 from nacl.public import PrivateKey, Box, PublicKey
@@ -13,6 +13,9 @@ class Client(object):
         self.uid = None
         self.client_key = None
         self.server_key = None
+
+        self.public_key = None
+        self.private_key = None
 
     def register(self):
         a, q = self.pow()
@@ -31,7 +34,9 @@ class Client(object):
             raise
 
         resp = r.json()
-        self.client_key = PrivateKey(resp["privkey"], Base64Encoder)
+        self.private_key = base64.b64decode(resp["privkey"])
+        self.public_key = base64.b64decode(resp["pubkey"])
+        self.client_key = PrivateKey(self.private_key[:32])
         self.uid = resp["uid"]
 
     def login(self, uid):

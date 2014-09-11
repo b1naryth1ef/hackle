@@ -8,6 +8,7 @@ import txredis
 
 import nacl.utils
 from nacl.public import PrivateKey, Box, PublicKey
+from nacl.signing import SigningKey
 from nacl.encoding import Base64Encoder
 
 dbpool = adbapi.ConnectionPool("sqlite3", "hek.db", check_same_thread=False)
@@ -73,8 +74,11 @@ def connect_redis():
     global REDIS
     REDIS = yield clientCreator.connectTCP(REDIS_HOST, REDIS_PORT)
 
-def create_new_keypair():
-    return PrivateKey.generate()
+def create_new_key():
+    # We use a signkey to get a 64bit key, instead of a 32bit key...
+    #  because nacl?
+    key = SigningKey.generate()
+    return str(key._signing_key)
 
 def setup_server_keys():
     global SERVER_KEY
@@ -82,7 +86,7 @@ def setup_server_keys():
         if not os.path.exists("keys"):
             os.mkdir("keys")
 
-        SERVER_KEY = create_new_keypair()
+        SERVER_KEY = PrivateKey.generate()
 
         with open("keys/server.key", "w") as f:
             f.write(SERVER_KEY._private_key)
@@ -148,14 +152,16 @@ def register(r):
     #     return
 
     uid = str(uuid.uuid4())
-    priv = create_new_keypair()
+    priv = create_new_key()
+    priv_key = PrivateKey(priv[:32])
+
     yield dbpool.runQuery("INSERT INTO users (uid, pubkey) VALUES (?, ?)",
-        (uid, base64.b64encode(str(priv.public_key))))
+        (uid, base64.b64encode(str(priv_key.public_key))))
 
     jsonify(r, {
         "uid": uid,
-        "privkey": base64.b64encode(priv._private_key),
-        "pubkey": base64.b64encode(str(priv.public_key))
+        "privkey": base64.b64encode(priv),
+        "pubkey": base64.b64encode(str(priv_key.public_key))
     })
 
     increase_workload(r)
