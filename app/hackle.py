@@ -154,7 +154,8 @@ def register(r):
 
     jsonify(r, {
         "uid": uid,
-        "key": base64.b64encode(priv._private_key)
+        "privkey": base64.b64encode(priv._private_key),
+        "pubkey": base64.b64encode(str(priv.publickey))
     })
 
     increase_workload(r)

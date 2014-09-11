@@ -31,7 +31,7 @@ class Client(object):
             raise
 
         resp = r.json()
-        self.client_key = PrivateKey(resp["key"], Base64Encoder)
+        self.client_key = PrivateKey(resp["privkey"], Base64Encoder)
         self.uid = resp["uid"]
 
     def login(self, uid):
