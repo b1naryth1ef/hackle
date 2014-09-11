@@ -199,7 +199,7 @@ def login(r):
     user_pub_key = PublicKey(user[0][1], Base64Encoder)
     enc_content = base64.b64decode(r.args["payload"][0])
     box = Box(SERVER_KEY, user_pub_key)
-    raw = json.loads(box.decrypt(enc_content))
+    raw = json.loads(box.decrypt(enc_content, r.args.get("nonce")[0]))
 
     if (time.time() - raw["timestamp"]) > 60:
         jsonify(r, {

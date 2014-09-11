@@ -59,6 +59,7 @@ class Client(object):
         r = requests.post(self.url + "/api/login", params={
             "powa": a,
             "powq": q,
+            "nonce": nonce,
             "payload": base64.b64encode(payload),
             "uid": uid
         })
