@@ -1,4 +1,4 @@
-import json, time, hashlib, random, os, base64
+import json, time, hashlib, random, os, base64, uuid
 from klein import route
 from twisted.internet import defer
 from twisted.enterprise import adbapi
@@ -97,7 +97,7 @@ def create_database_schema():
     USER_TABLE = """
     CREATE TABLE users (
         id INTEGER PRIMARY KEY ASC,
-        username TEXT,
+        uid TEXT,
         pubkey TEXT
     );
     """
@@ -136,23 +136,24 @@ def register(r):
         increase_workload(r)
         return
 
-    username = r.args.get("username")[0]
-    exists = yield dbpool.runQuery("SELECT count(*) FROM users WHERE username=? LIMIT 1",
-        (username, ))
+    # username = r.args.get("username")[0]
+    # exists = yield dbpool.runQuery("SELECT count(*) FROM users WHERE username=? LIMIT 1",
+    #     (username, ))
 
-    if len(exists) and exists[0][0] != 0:
-        jsonify(r, {
-            "error": "Username already exists!"
-        }, 400)
-        increase_workload(r)
-        return
+    # if len(exists) and exists[0][0] != 0:
+    #     jsonify(r, {
+    #         "error": "Username already exists!"
+    #     }, 400)
+    #     increase_workload(r)
+    #     return
 
+    uid = str(uuid.uuid4())
     priv = create_new_keypair()
-    id = yield dbpool.runQuery("INSERT INTO users (username, pubkey) VALUES (?, ?)",
-        (username, base64.b64encode(str(priv.public_key))))
+    yield dbpool.runQuery("INSERT INTO users (uid, pubkey) VALUES (?, ?)",
+        (uid, base64.b64encode(str(priv.public_key))))
 
     jsonify(r, {
-        "id": id,
+        "uid": uid,
         "key": base64.b64encode(priv._private_key)
     })
 
@@ -176,14 +177,14 @@ def login(r):
         increase_workload(r)
         return
 
-    username = r.args.get("username", [])[0]
+    uid = r.args.get("uid", [])[0]
 
-    user = yield dbpool.runQuery("SELECT id, pubkey FROM users WHERE username=? LIMIT 1;",
-        (username, ))
+    user = yield dbpool.runQuery("SELECT id, pubkey FROM users WHERE uid=? LIMIT 1;",
+        (uid, ))
 
     if not len(user):
         jsonify(r, {
-            "error": "Invalid Username!"
+            "error": "Invalid UID!"
         }, 400)
         increase_workload(r)
         return
@@ -211,7 +212,6 @@ def login(r):
     jsonify(r, {
         "id": res[0][0]
     })
-
 
 @route("/api/logout")
 def logout(r):

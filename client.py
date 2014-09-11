@@ -10,10 +10,11 @@ class Client(object):
     def __init__(self, url):
         self.url = url
 
+        self.uid = None
         self.client_key = None
         self.server_key = None
 
-    def register(self, username):
+    def register(self):
         a, q = self.pow()
 
         if a == -1:
@@ -21,8 +22,7 @@ class Client(object):
 
         r = requests.post(self.url + "/api/register", params={
             "powq": q,
-            "powa": a,
-            "username": username
+            "powa": a
         })
         try:
             r.raise_for_status()
@@ -30,9 +30,11 @@ class Client(object):
             print r.content
             raise
 
-        self.client_key = PrivateKey(r.json()["key"], Base64Encoder)
+        resp = r.json()
+        self.client_key = PrivateKey(resp["key"], Base64Encoder)
+        self.uid = resp["uid"]
 
-    def login(self, username):
+    def login(self, uid):
         a, q = self.pow()
 
         if a == -1:
@@ -53,7 +55,7 @@ class Client(object):
             "powa": a,
             "powq": q,
             "payload": base64.b64encode(payload),
-            "username": username
+            "uid": uid
         })
 
         try:
@@ -85,6 +87,5 @@ class Client(object):
 c = Client(URL)
 c.info()
 
-user = str(random.randint(1, 60000))
-c.register(user)
-c.login(user)
+c.register()
+c.login(c.uid)
